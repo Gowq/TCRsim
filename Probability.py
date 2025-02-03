@@ -34,30 +34,25 @@ class Probability:
 
         self.prob_bonus = 0
 
-    @staticmethod
-    def will_vote(self, voter, prob_vote):
-        return (voter.is_engaged() and self.prob_vote_engaged > prob_vote) or \
-                (not voter.is_engaged() and self.prob_vote_disengaged > prob_vote)
+    def will_vote(self, voter, prob_vote,):
+        return (voter.get_engagement() and self.prob_vote_engaged > prob_vote) or \
+                (not voter.get_engagement() and self.prob_vote_disengaged > prob_vote)
 
-    @staticmethod
     def will_vote_correct(self, voter, prob_vote_correct):
-        return (voter.is_informed() and (self.prob_vote_correct_informed + self.prob_bonus) > prob_vote_correct) or \
-                (not voter.is_informed() and (self.prob_vote_correct_uninformed + self.prob_bonus) > prob_vote_correct)
+        return (voter.get_information() and (self.prob_vote_correct_informed + self.prob_bonus) > prob_vote_correct) or \
+                (not voter.get_information() and (self.prob_vote_correct_uninformed + self.prob_bonus) > prob_vote_correct)
     
-    @staticmethod
     def will_object(self, voter, prob_obj):
-        return (voter.is_engaged() and self.prob_obj_engaged > prob_obj) or \
-                (not voter.is_engaged() and self.prob_obj_disengaged > prob_obj)
+        return (voter.get_engagement() and self.prob_obj_engaged > prob_obj) or \
+                (not voter.get_engagement() and self.prob_obj_disengaged > prob_obj)
     
-    @staticmethod
     def will_object_correct(self, voter, prob_obj_correct):
-        return (voter.is_informed() and self.prob_obj_correct_informed > prob_obj_correct) or \
-                (not voter.is_informed() and self.prob_obj_correct_uninformed > prob_obj_correct)
+        return (voter.get_information() and self.prob_obj_correct_informed > prob_obj_correct) or \
+                (not voter.get_information() and self.prob_obj_correct_uninformed > prob_obj_correct)
 
-    @staticmethod
     def objection_effect(self, effect):
         if effect:
-            self.prob_bonus = 0.2
+            self.prob_bonus = 0.9
         else:
-            self.prob_bonus = -0.2
+            self.prob_bonus = -0.9
         

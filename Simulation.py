@@ -1,368 +1,388 @@
-import numpy as np
-import csv
 import random
+import csv
+import matplotlib.pyplot as plt
+from copy import copy
 from Voter import Voter
 from Item import Item
 from TCR import TCR
-from copy import copy
 from Probability import Probability
 from Registry import Registry
 
-import matplotlib.pyplot as plt
-
 
 class Simulation:
+    def __init__(self, probability, registry, quantity_votes, debug=False):
+        self.probability = probability
+        self.registry = registry
+        self.quantity_votes = quantity_votes
+        self.vote_results = []  
+        self.item_array = []
+        self.tcr_array = []
+        self.debug = debug 
+        self.next_voter_id = 0
+        self.round_number = 0
+        self.voters = []  # Lista de eleitores personalizados
+        self.registry.num_voters = 0  # Reinicia o contador de eleitores
 
-    @staticmethod
-    def set_round(voter, item, probability, registry):
+    def process_voter(self, voter, item):
+        prob_object = random.random()
+        prob_vote = random.random()
+
+        if self.probability.will_object(voter, prob_object) and not self.registry.blocked:
+            return self.process_objection(voter, item)
         
-        prob_object, prob_vote = random.random(), random.random()
-
-        if probability.will_object(probability, voter, prob_object) and not registry.blocked:
-            return Simulation.set_objection(voter, item, probability, registry)
-
-        if probability.will_vote(probability, voter, prob_vote):
-            return Simulation.set_vote(voter, item, probability, registry)
+        if self.probability.will_vote(voter, prob_vote):
+            return self.process_vote(voter, item)
         
         return voter
-        
-    def set_vote(voter, item, probability, registry):
+
+    def process_vote(self, voter, item):
+        if not voter.has_enough_tokens(self.registry.stake):
+            return voter
+
+        old_tokens = voter.get_tokens()
+        prob_correct = random.random()
+        status = self.get_voter_status(voter)
     
-        if not voter.has_enough_tokens(registry.stake):
-            return
+        self.registry.stake_pool += self.registry.stake
+        voter.set_tokens(old_tokens - self.registry.stake) 
 
-        prob_vote_correct = random.random()
-
-        registry.stake_pool += registry.stake
-        voter.set_tokens(voter.get_tokens() - registry.stake)
-
-        if probability.will_vote_correct(probability, voter, prob_vote_correct):
-            voter.set_vote(item.is_valid())  # set vote to correct vote
+        if self.debug:
+            print(f"[Round {self.round_number}] Voter {voter.voter_id} ({status}) "
+                  f"perdeu {self.registry.stake} tokens (Aposta). "
+                  f"Tokens: {old_tokens} → {voter.get_tokens()}")
+       
+        if self.probability.will_vote_correct(voter, prob_correct):
+            new_vote = item.is_valid()
         else:
-            voter.set_vote(not item.is_valid())  # sets vote to incorrect vote
+            new_vote = not item.is_valid()
+        
+        old_vote = voter.get_vote()  
+        voter.set_vote(new_vote)
+
+        if self.debug and old_vote != new_vote:
+            print(f"[Round {self.round_number}] Voter {voter.voter_id} ({status}) "
+                  f"votou: {new_vote}")
 
         return voter
-    
-    def set_objection(voter, item, probability, registry):
 
-        objection_cost = 2 * registry.stake
-
+    def process_objection(self, voter, item):
+        objection_cost = 2 * self.registry.stake
         if not voter.has_enough_tokens(objection_cost):
-            return
+            return voter
 
-        prob_object_correct = random.random()
+        old_tokens = voter.get_tokens()
+        status = self.get_voter_status(voter)
+        prob_correct = random.random()
+        self.registry.stake_pool += objection_cost
+        voter.set_tokens(old_tokens - objection_cost)
 
-        registry.stake_pool += objection_cost
-        voter.set_tokens(voter.get_tokens() - objection_cost)
-        voter.set_vote(item.is_objection())
-        registry.increase_itens()       
+        if self.debug:
+            print(f"[Round {self.round_number}] Voter {voter.voter_id} ({status}) "
+                  f"perdeu {objection_cost} tokens (Objeção). "
+                  f"Tokens: {old_tokens} → {voter.get_tokens()}")
+            print(f"[Round {self.round_number}] Voter {voter.voter_id} ({status}) "
+                  f"fez uma objeção.")
+            
+        voter.set_vote(False)  
+        self.registry.increase_itens()
+        item.set_objection()
 
-        if probability.will_object_correct(probability, voter, prob_object_correct):
-            probability.objection_effect(probability, True)
+        if self.debug:  # Novo
+            print(f"[Debug] Voter {voter.voter_id} fez uma objeção.")
+
+        if self.probability.will_object_correct(voter, prob_correct):
+            self.probability.objection_effect(True)
         else:
-            probability.objection_effect(probability, False)
-
-        registry.block()
-
+            self.probability.objection_effect(False)
+        
+        self.registry.block()
         return voter
 
-    @staticmethod
-    def write_csv(tcr_array, item_array, vote_results):
-        with open("output.csv", "w", newline='') as csvfile:
-            writer = csv.writer(csvfile)
+    def run_simulation_round(self, round_time):
+        self.round_number += 1
+        self.registry.stake_pool = 0
 
-            # Write header row
-            header_row = ["TCR Val", "Valid", "Accept"]
-            for i in range(registries.num_voters):
-                header_row.append("V" + str(i + 1))
-            header_row.append("Total")
-            writer.writerow(header_row)
+        if self.debug:
+            print(f"\n{'='*40}")
+            print(f"Round {self.round_number} - Início")
+            print(f"{'='*40}")
 
-            total = 0
-            for i in range(registries.num_items):
-                row = ["%.2f" % tcr_array[i].get_tcr_value(), str(item_array[i].is_valid()),
-                       str(item_array[i].is_accepted())]
-                for j in range(registries.num_voters):
-                    total += vote_results[i, j].get_tokens()
-                    row.append("%.2f" % vote_results[i, j].get_tokens())
-                row.append(str(total))
-                total = 0
-                writer.writerow(row)
-
-            # Write engagement status
-            engagement_row = [""] * 3
-            for i in range(registries.num_voters):
-                if vote_results[0, i].is_engaged():
-                    engagement_row.append("Eng")
-                else:
-                    engagement_row.append("Uneng")
-            writer.writerow(engagement_row)
-
-            # Write information status
-            information_row = [""] * 3
-            for i in range(registries.num_voters):
-                if vote_results[0, i].is_informed():
-                    information_row.append("Inf")
-                else:
-                    information_row.append("Uninf")
-            writer.writerow(information_row)
-
-    # Generates a graph with averages per round of tokens generated by category
-    def generate_voter_plot(self, vote_results, registry):
-        arr_informed_engaged = np.zeros(registry.num_items, dtype=float)
-        arr_uninformed_engaged = np.zeros(registry.num_items, dtype=float)
-        arr_informed_unengaged = np.zeros(registry.num_items, dtype=float)
-        arr_uninformed_unengaged = np.zeros(registry.num_items, dtype=float)
-
-        num_informed_engaged = 0
-        num_uninformed_engaged = 0
-        num_informed_unengaged = 0
-        num_uninformed_unengaged = 0
-
-        for i in range(registry.num_voters):
-            voter = vote_results[0, i]
-            if voter.is_informed() and voter.is_engaged():
-                num_informed_engaged += 1
-            elif voter.is_informed() and not voter.is_engaged():
-                num_informed_unengaged += 1
-            elif not voter.is_informed() and voter.is_engaged():
-                num_uninformed_engaged += 1
-            elif not voter.is_informed() and not voter.is_engaged():
-                num_uninformed_unengaged += 1
-
-        for i in range(registry.num_items):
-            for j in range(registry.num_voters):
-                voter = vote_results[i, j]
-                if voter.is_informed() and voter.is_engaged():
-                    arr_informed_engaged[i] += voter.get_tokens()
-                elif voter.is_informed() and not voter.is_engaged():
-                    arr_informed_unengaged[i] += voter.get_tokens()
-                elif not voter.is_informed() and voter.is_engaged():
-                    arr_uninformed_engaged[i] += voter.get_tokens()
-                elif not voter.is_informed() and not voter.is_engaged():
-                    arr_uninformed_unengaged[i] += voter.get_tokens()
-
-
-            arr_informed_engaged[i] /= num_informed_engaged if num_informed_engaged != 0 else 1
-            arr_informed_unengaged[i] /= num_informed_unengaged if num_informed_unengaged != 0 else 1
-            arr_uninformed_engaged[i] /= num_uninformed_engaged if num_uninformed_engaged != 0 else 1
-            arr_uninformed_unengaged[i] /= num_uninformed_unengaged if num_uninformed_unengaged != 0 else 1
-
-
-        final = arr_informed_engaged[registry.num_items - 1] - 100
-        final += arr_informed_unengaged[registry.num_items - 1] - 100
-        final +=  arr_uninformed_engaged[registry.num_items - 1] - 100
-        final +=  arr_uninformed_unengaged[registry.num_items - 1] - 100
-
-        print("reward: " + str(final))
-
-        plt.plot(arr_informed_engaged, label='informed-engaged')
-        plt.plot(arr_informed_unengaged, label='informed-disengaged')
-        plt.plot(arr_uninformed_engaged, label='uninformed-engaged')
-        plt.plot(arr_uninformed_unengaged, label='uninformed-disengaged')
-
-        print("num_informed_engaged: " + str(num_informed_engaged))
-        print("num_informed_unengaged: " + str(num_informed_unengaged))
-        print("num_uninformed_engaged: " + str(num_uninformed_engaged))
-        print("num_uninformed_unengaged: " + str(num_uninformed_unengaged))
-
-        plt.xlabel('Voting Round')
-        plt.ylabel('Tokens')
-        plt.legend(loc='upper left')
-        plt.savefig('images/token_infm' + str(Probability.prob_informed)[2] + 'infl' + str(registry.delta)[2:] + '.png')
-        plt.show()
-
-    @staticmethod
-    def generate_tcr_plot(tcr_array):
-        token_values = []
-        for tcr in tcr_array:
-            token_values.append(tcr.get_tcr_value())
-        plt.plot(token_values, label='TCR Value')
-        plt.xlabel('Voting Round')
-        plt.ylabel('Value')
-        plt.legend(loc='upper left')
-        plt.savefig('images/tcr_infm' + str(Probability.prob_informed)[2] + 'infl' + str(registries.delta)[2:] + '.png')
-        plt.show()
-
-    '''
-    wealth of IE class = ( total # of tokens held by IE voters / total # of tokens ) * TCR value
-
-    average wealth of an IE voter = class wealth / # of individuals 
-    '''
-
-    def generate_wealth_plot(self, vote_results, tcr_array, registry):
-        wealth_ie = np.zeros(registry.num_items, dtype=float)
-        wealth_iu = np.zeros(registry.num_items, dtype=float)
-        wealth_ue = np.zeros(registry.num_items, dtype=float)
-        wealth_uu = np.zeros(registry.num_items, dtype=float)
-
-        num_informed_engaged = 0
-        num_uninformed_engaged = 0
-        num_informed_unengaged = 0
-        num_uninformed_unengaged = 0
-
-        for i in range(registry.num_voters):
-            voter = vote_results[0, i]
-            if voter.is_informed() and voter.is_engaged():
-                num_informed_engaged += 1
-            elif voter.is_informed() and not voter.is_engaged():
-                num_informed_unengaged += 1
-            elif not voter.is_informed() and voter.is_engaged():
-                num_uninformed_engaged += 1
-            elif not voter.is_informed() and not voter.is_engaged():
-                num_uninformed_unengaged += 1
-
-        for i in range(registry.num_items):
-            for j in range(registry.num_voters):
-                voter = vote_results[i, j]
-                if voter.is_informed() and voter.is_engaged():
-                    wealth_ie[i] += voter.get_tokens()
-                elif voter.is_informed() and not voter.is_engaged():
-                    wealth_iu[i] += voter.get_tokens()
-                elif not voter.is_informed() and voter.is_engaged():
-                    wealth_ue[i] += voter.get_tokens()
-                elif not voter.is_informed() and not voter.is_engaged():
-                    wealth_uu[i] += voter.get_tokens()
-
-            wealth_ie[i] = (tcr_array[i].get_tcr_value() / tcr_array[i].get_total_tokens()) * (
-                    wealth_ie[i] / num_informed_engaged)
-            wealth_iu[i] = (tcr_array[i].get_tcr_value() / tcr_array[i].get_total_tokens()) * (
-                    wealth_iu[i] / num_informed_unengaged)
-            wealth_ue[i] = (tcr_array[i].get_tcr_value() / tcr_array[i].get_total_tokens()) * (
-                    wealth_ue[i] / num_uninformed_engaged)
-            wealth_uu[i] = (tcr_array[i].get_tcr_value() / tcr_array[i].get_total_tokens()) * (
-                    wealth_uu[i] / num_uninformed_unengaged)
-
-        plt.plot(wealth_ie, label='informed-engaged')
-        plt.plot(wealth_iu, label='informed-disengaged')
-        plt.plot(wealth_ue, label='uninformed-engaged')
-        plt.plot(wealth_uu, label='uninformed-disengaged')
-        plt.xlabel('Voting Round')
-        plt.ylabel('Average Wealth')
-        plt.legend(loc='upper left')
-        plt.savefig('images/wealth_infm' + str(Probability.prob_informed)[2] + 'infl' + str(registry.delta)[2:] + '.png')
-        plt.show()
-
-    def set_tcr_values(self, tcr_array, item_array):
-        for i in range(registries.num_items):
-            num_tokens = tcr_array[i].get_total_tokens()
-            if i != 0:
-                tcr = tcr_array[i - 1]
-            else:
-                tcr = tcr_array[i]
-
-            tcr_array[i] = copy(tcr)
-            tcr_array[i].set_total_tokens(num_tokens)
-
-            item = item_array[i]
-            if item.is_valid() and item.is_accepted():
-                tcr_array[i].set_tcr_value(1, 0, 0, 0)
-            elif item.is_valid() and not item.is_accepted():
-                tcr_array[i].set_tcr_value(0, 0, 0, 1)
-            elif not item.is_valid() and item.is_accepted():
-                tcr_array[i].set_tcr_value(0, 0, 1, 0)
-            elif not item.is_valid() and not item.is_accepted():
-                tcr_array[i].set_tcr_value(0, 1, 0, 0)
-
-    def main(self, probability, registry, quantity_votes):
-
-        vote_results = np.empty((registry.num_items, registry.num_voters), dtype=type(Voter))
-        item_array = np.array([Item() for _ in range(registry.num_items)])
-        tcr_array = np.empty(registry.num_items, dtype=type(TCR))
-
-        random.seed(2)
-
-        round_time = registries.code_complexity
+        votes_round = min(
+            int(random.gauss(self.quantity_votes * round_time, 1)),
+            self.registry.num_voters
+        )
         
-        i = 0
+        current_voters = []
+        item = Item()
 
+        # Usa apenas os eleitores personalizados criados
+        for j in range(votes_round):
+            voter = copy(self.voters[j % len(self.voters)])
+            voter.set_vote(None)
+            processed_voter = self.process_voter(voter, item)
+            current_voters.append(processed_voter)
+
+        # Atualiza a lista principal de eleitores
+        for idx, processed_voter in enumerate(current_voters):
+            self.voters[idx % len(self.voters)] = processed_voter
+        
+        accepted = sum(v.get_vote() for v in current_voters if v.get_vote() is not None)
+        rejected = sum(1 for v in current_voters if v.get_vote() is False)
+        item.set_acceptance(accepted >= rejected)
+
+        if self.debug:
+            print(f"\n{'='*40}")
+            print(f"Round {self.round_number} - Resultado Final")
+            print(f"Item válido: {item.is_valid()} | Aceito: {accepted >= rejected}")
+            print(f"{'='*40}\n")
+
+        self.item_array.append(item)
+        self.vote_results.append(current_voters)
+        num_winners = sum(1 for v in current_voters if v.get_vote() == item.is_accepted())
+        self.update_tokens(current_voters, num_winners)
+        self.update_tcr()
+
+    def update_tokens(self, voters, participants):
+        if participants == 0:
+            return
+
+        # Existing stake distribution logic
+        stake_total = self.registry.stake_pool
+        winners = sum(1 for v in voters if v.get_vote() == self.item_array[-1].is_accepted())
+        if winners == 0:
+            return
+
+        stake_per_voter = stake_total / winners
+        remainder = stake_total - (stake_per_voter * winners)
+
+        for idx, voter in enumerate(voters):
+            if voter.get_vote() == self.item_array[-1].is_accepted():
+                add_amount = stake_per_voter + (remainder if idx == 0 else 0)
+                voter.set_tokens(voter.get_tokens() + add_amount)
+                
+                if self.debug:
+                    status = self.get_voter_status(voter)
+                    print(f"[Round {self.round_number}] Voter {voter.voter_id} ({status}) "
+                        f"ganhou {add_amount:.2f} tokens.")
+
+        # New inflation mechanism using delta
+        if self.registry.delta > 0:
+            # Calculate inflation based on current total tokens
+            old_total = sum(v.get_tokens() for v in self.voters)
+            inflation_amount = old_total * self.registry.delta
+            
+            # Distribute inflation proportionally to all winner voters
+            if old_total > 0:
+                for voter in self.voters:
+                    share = voter.get_tokens() / old_total
+                    if voter.get_vote() == self.item_array[-1].is_accepted():
+                        voter.set_tokens(voter.get_tokens() + share * inflation_amount)
+                    else:
+                        voter.set_tokens(voter.get_tokens() + share)
+            
+            # Update total tokens in registry
+            self.registry.total_tokens = old_total + inflation_amount
+            
+            # Adjust stake with inflation
+            self.registry.stake *= (1 + self.registry.delta)
+
+        # Update TCR value calculation
+        #self.registry.stake = (self.registry.stake / self.registry.default_tokens) * \
+        #                    (self.registry.total_tokens / self.registry.num_voters)
+
+    def update_tcr(self):
+        # Use registry's total_tokens that includes inflation
+        new_tcr = TCR(self.registry.total_tokens)
+        
+        if self.item_array[-1].is_valid() and self.item_array[-1].is_accepted():
+            new_tcr.set_tcr_value(1, 0, 0, 0)
+        elif self.item_array[-1].is_valid() and not self.item_array[-1].is_accepted():
+            new_tcr.set_tcr_value(0, 0, 0, 1)
+        elif not self.item_array[-1].is_valid() and self.item_array[-1].is_accepted():
+            new_tcr.set_tcr_value(0, 0, 1, 0)
+        else:
+            new_tcr.set_tcr_value(0, 1, 0, 0)
+        
+        self.tcr_array.append(new_tcr)
+
+    def run(self):
+        round_time = self.registry.code_complexity
         while round_time >= 1:
-            votes_per_round = quantity_votes * round_time 
-
-            accepted_votes = 0
-            rejected_votes = 0
-            item = Item()
-
-            quantity_votes_round = np.random.poisson(votes_per_round, 1)[0]
-
-            if (quantity_votes_round > registries.num_voters):
-                quantity_votes_round = registries.num_voters 
-
-
             if round_time != 1:
-                registry.unblock()
-            
-            for j in range(quantity_votes_round):
-
-                if i == 0: 
-                    vote_result = self.set_round(Voter(registry.default_tokens, probability.prob_engaged,
-                                                                probability.prob_informed), item, probability, registry)
-
-                else:
-
-                    v = copy(vote_results[i - 1, j])
-                    v.set_vote(None)
-                    vote_result = self.set_round(v, item, probability, registry)
-
-                vote_results = np.resize(vote_results, (registry.num_items, registry.num_voters))
-                vote_results[i, j] = vote_result
-
-                if vote_results[i, j].get_vote()  is True:
-                    accepted_votes += 1
-                elif vote_results[i, j].get_vote() is False:
-                    rejected_votes += 1
-
-            item_array = np.resize(item_array, registry.num_items)
-            tcr_array = np.resize(tcr_array, registry.num_items)
-
-            if accepted_votes >= rejected_votes:
-                # if num of accepted votes is greater than the majority (0.5) then set the item to be accepted
-                item.set_acceptance(True)
-                num_majority = accepted_votes
-            else:
-                item.set_acceptance(False)
-                num_majority = rejected_votes
-            item_array[i] = item
-    
-            
-
-            #prev_tokens = registry.total_tokens
-            #registry.total_tokens = (1 + registry.delta) * registry.total_tokens
-            tcr_array[i] = TCR(registry.total_tokens)
-
-            for j in range(registry.num_voters):
-                voter = vote_results[i, j]
-                num_stake_majority_tokens = registry.stake_pool / num_majority if num_majority != 0 else 0
-                #num_inflation_tokens = (registry.total_tokens - prev_tokens) / (accepted_votes + rejected_votes)
-                if voter.get_vote() is not None:
-                    if item_array[i].is_accepted() == voter.get_vote():
-                        # if voter voted correctly, give self.stake value back
-                        voter.set_tokens(voter.get_tokens() + num_stake_majority_tokens)
-
-                    # every voter gets total tokens * self.delta tokens
-                    #voter.set_tokens(voter.get_tokens() + num_inflation_tokens)
-                    voter.set_tokens(voter.get_tokens())
-            # self.stake = (self.stake * (1 + self.delta))
-            registry.stake = (registry.initial_stake / registry.default_tokens) * (registry.total_tokens / registry.num_voters)
-
-            i = registry.num_items - 1
+                self.registry.unblock()
+            self.run_simulation_round(round_time)
             round_time /= 2
 
-        self.set_tcr_values(tcr_array, item_array)
-        self.write_csv(tcr_array, item_array, vote_results)
-        self.generate_voter_plot(vote_results, registry)
-        #self.generate_tcr_plot(tcr_array)
-        #self.generate_wealth_plot(vote_results, tcr_array, registry)
+        self.write_csv()
+        self.generate_plots()
+
+    def write_csv(self):
+        with open("output.csv", "w", newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(["TCR Val", "Valid", "Accept"] + [f"V{i+1}" for i in range(self.registry.num_voters)] + ["Total"])
+            
+            for i, item in enumerate(self.item_array):
+                row = [
+                    f"{self.tcr_array[i].get_tcr_value():.2f}",
+                    str(item.is_valid()),
+                    str(item.is_accepted())
+                ]
+                row += [f"{v.get_tokens():.2f}" for v in self.vote_results[i]]
+                row.append(f"{sum(v.get_tokens() for v in self.vote_results[i]):.2f}")
+                writer.writerow(row)
+
+    def get_voter_status(self, voter):
+        informed = "I" if voter.get_information() else "U"
+        engaged = "E" if voter.get_engagement() else "U"
+        return f"{informed}/{engaged}"
+
+    def generate_plots(self):
+        self.generate_voter_plot()
+        self.generate_tcr_plot()
+
+    def generate_voter_plot(self):
+        categories = {
+            'ie': {'values': [], 'count': 0},
+            'iu': {'values': [], 'count': 0},
+            'ue': {'values': [], 'count': 0},
+            'uu': {'values': [], 'count': 0}
+        }
+
+        # Inicializa as contagens com base na primeira rodada
+        if self.vote_results:
+            for voter in self.vote_results[0]:
+                key = ('i' if voter.get_information() else 'u') + ('e' if voter.get_engagement() else 'u')
+                categories[key]['count'] += 1
+
+        # Coleta dados históricos de cada rodada
+        for round_voters in self.vote_results:
+            sums = {k: 0.0 for k in categories}
+            for voter in round_voters:  # Usa os eleitores da rodada específica
+                #print(voter.voter_id)
+                #print(voter.get_tokens())
+                key = ('i' if voter.get_information() else 'u') + ('e' if voter.get_engagement() else 'u')
+                sums[key] += voter.get_tokens()
+            print("=" * 40)
+            print(sums)
+                    
+            for key in categories:
+                count = categories[key]['count'] or 1  # Evita divisão por zero
+                print(count)
+                categories[key]['values'].append(sums[key] / count)
+
+        # Plotagem do gráfico
+        plt.figure(figsize=(12, 6))
+        for label, data in categories.items():
+            plt.plot(data['values'], label={
+                'ie': 'Informed-Engaged',
+                'iu': 'Informed-Unengaged',
+                'ue': 'Uninformed-Engaged',
+                'uu': 'Uninformed-Unengaged'
+            }[label])
+        
+        plt.xlabel("Voting Round")
+        plt.ylabel("Average Tokens")
+        plt.legend()
+        plt.savefig("voter_tokens.png")
+        plt.close()
+
+    def generate_tcr_plot(self):
+        values = [t.get_tcr_value() for t in self.tcr_array]
+        plt.plot(values)
+        plt.xlabel("Voting Round")
+        plt.ylabel("TCR Value")
+        plt.savefig("tcr_values.png")
+        plt.close()
+
+    def create_voter_group(self, 
+                          count: int,
+                          tokens: float = None,
+                          prob_engaged: float = None,  
+                          prob_informed: float = None,
+                          is_engaged: bool = None,
+                          is_informed: bool = None
+                          ): 
+        """Create voter group with EXPLICIT probabilities"""
+        
+        # Validate inputs
+        if count <= 0:
+            raise ValueError("Count must be positive integer")
+            
+        if tokens is None:
+            tokens = self.registry.default_tokens
+
+        # Create voters with explicit probabilities
+        for _ in range(count):
+            voter = Voter(
+                tokens=tokens,
+                p_engaged=prob_engaged,
+                p_informed=prob_informed,
+                voter_id=self.next_voter_id,
+                is_engaged=is_engaged,
+                is_informed=is_informed
+            )
+            self.next_voter_id += 1
+            self.voters.append(voter)
+
+        self.registry.num_voters += count
 
 
-probabilities = Probability(prob_vote_engaged=0.5, prob_vote_disengaged=0.1, prob_vote_correct_informed=0.5, prob_vote_correct_uninformed=0.1,
-                            prob_obj_engaged=0.5, prob_obj_disengaged=0.1, prob_obj_correct_informed=0.5, prob_obj_correct_uninformed=0.1,
-                            prob_engaged=0.5, prob_informed=0.5)
+if __name__ == "__main__":
+    prob = Probability(
+        prob_vote_engaged=0.9,
+        prob_vote_disengaged=0.3,
+        prob_vote_correct_informed=0.9,
+        prob_vote_correct_uninformed=0.1,
+        prob_obj_engaged=0.0,
+        prob_obj_disengaged=0.0,
+        prob_obj_correct_informed=0.9,
+        prob_obj_correct_uninformed=0.1,
+        prob_engaged=0.5,
+        prob_informed=0.5
+    )
 
-registries = Registry(num_voters=8,default_tokens=100.0, delta=0.05, stake=5.0, initial_stake=5.0, code_complexity=8)
+    registry = Registry(
+        num_voters=100,
+        default_tokens=1000,
+        stake=200,
+        initial_stake=200,
+        delta=0.1,
+        code_complexity=pow(2,20)
+    )
 
-quantity_votes = registries.num_voters * (probabilities.prob_engaged * probabilities.prob_vote_engaged + (1 - probabilities.prob_engaged) * probabilities.prob_vote_disengaged)
 
-simulation = Simulation()
+    #quantity_votes = registry.num_voters * (prob.prob_engaged * prob.prob_vote_engaged + (1 - prob.prob_engaged) * prob.prob_vote_disengaged)
 
-simulation.main(probabilities, registries, quantity_votes)
+    sim = Simulation(prob, registry, quantity_votes=registry.num_voters, debug=True)
+ 
+    # Criação de grupos personalizados
+    sim.create_voter_group(
+        count=20,   
+        tokens=3000,
+        is_engaged=False,
+        is_informed=True
+    )
+
+    sim.create_voter_group(
+        count=20,  
+        tokens=3000,
+        is_engaged=True,
+        is_informed=False  
+    )
+
+    sim.create_voter_group(
+        count=20,  
+        tokens=3000,
+        is_engaged=True,
+        is_informed=True  
+    )
+
+    sim.create_voter_group(
+        count=20,  
+        tokens=3000,
+        is_engaged=False,
+        is_informed=False 
+    )
+
+
+    sim.run()
