@@ -10,6 +10,8 @@ from Registry import Registry
 
 
 class Simulation:
+    invalid_item = 0
+
     def __init__(self, probability, registry, quantity_votes, debug=False):
         self.probability = probability
         self.registry = registry
@@ -135,6 +137,9 @@ class Simulation:
             print(f"Round {self.round_number} - Resultado Final")
             print(f"Item válido: {item.is_valid()} | Aceito: {accepted >= rejected}")
             print(f"{'='*40}\n")
+        
+            if item.is_valid() and rejected > accepted or not item.is_valid() and accepted >= rejected:
+                sim.invalid_item += 1
 
         self.item_array.append(item)
         self.vote_results.append(current_voters)
@@ -146,49 +151,50 @@ class Simulation:
         if participants == 0:
             return
 
-        # Existing stake distribution logic
+        # Distribuição normal dos tokens apostados
         stake_total = self.registry.stake_pool
         winners = sum(1 for v in voters if v.get_vote() == self.item_array[-1].is_accepted())
-        if winners == 0:
-            return
+        
+        if winners > 0:
+            stake_per_voter = stake_total / winners
+            remainder = stake_total - (stake_per_voter * winners)
 
-        stake_per_voter = stake_total / winners
-        remainder = stake_total - (stake_per_voter * winners)
+            for idx, voter in enumerate(voters):
+                if voter.get_vote() == self.item_array[-1].is_accepted():
+                    add_amount = stake_per_voter + (remainder if idx == 0 else 0)
+                    voter.set_tokens(voter.get_tokens() + add_amount)
+                    
+                    if self.debug:
+                        status = self.get_voter_status(voter)
+                        print(f"[Round {self.round_number}] Voter {voter.voter_id} ({status}) "
+                            f"ganhou {add_amount:.2f} tokens.")
 
-        for idx, voter in enumerate(voters):
-            if voter.get_vote() == self.item_array[-1].is_accepted():
-                add_amount = stake_per_voter + (remainder if idx == 0 else 0)
-                voter.set_tokens(voter.get_tokens() + add_amount)
-                
-                if self.debug:
-                    status = self.get_voter_status(voter)
-                    print(f"[Round {self.round_number}] Voter {voter.voter_id} ({status}) "
-                        f"ganhou {add_amount:.2f} tokens.")
-
-        # New inflation mechanism using delta
+        # Mecanismo de inflação apenas para vencedores
         if self.registry.delta > 0:
-            # Calculate inflation based on current total tokens
-            old_total = sum(v.get_tokens() for v in self.voters)
-            inflation_amount = old_total * self.registry.delta
+            # Calcula inflação baseada no total atual de tokens
+            inflation_amount = self.registry.total_tokens * self.registry.delta
             
-            # Distribute inflation proportionally to all winner voters
-            if old_total > 0:
-                for voter in self.voters:
-                    share = voter.get_tokens() / old_total
-                    if voter.get_vote() == self.item_array[-1].is_accepted():
-                        voter.set_tokens(voter.get_tokens() + share * inflation_amount)
-                    else:
-                        voter.set_tokens(voter.get_tokens() + share)
+            # Filtra apenas os vencedores
+            current_winners = [v for v in voters if v.get_vote() == self.item_array[-1].is_accepted()]
             
-            # Update total tokens in registry
-            self.registry.total_tokens = old_total + inflation_amount
-            
-            # Adjust stake with inflation
-            self.registry.stake *= (1 + self.registry.delta)
+            if current_winners:
+                # Calcula a participação proporcional de cada vencedor
+                total_winner_tokens = sum(winner.get_tokens() for winner in current_winners)
+                
+                if total_winner_tokens > 0:
+                    for winner in current_winners:
+                        share = winner.get_tokens() / total_winner_tokens
+                        winner.set_tokens(winner.get_tokens() + (share * inflation_amount))
+                    
+                    # Atualiza o total de tokens com a inflação
+                    self.registry.total_tokens += inflation_amount
 
-        # Update TCR value calculation
-        #self.registry.stake = (self.registry.stake / self.registry.default_tokens) * \
-        #                    (self.registry.total_tokens / self.registry.num_voters)
+            # Ajusta o stake usando o valor inicial ajustado pela inflação
+            self.registry.stake = self.registry.initial_stake * (1 + self.registry.delta) ** self.round_number
+            
+            if self.debug:
+                print(f"\n[Inflação] Stake ajustado para: {self.registry.stake:.2f}")
+                print(f"[Inflação] Total de tokens após ajuste: {self.registry.total_tokens:.2f}")
 
     def update_tcr(self):
         # Use registry's total_tokens that includes inflation
@@ -215,6 +221,9 @@ class Simulation:
 
         self.write_csv()
         self.generate_plots()
+
+        if (sim.debug):
+            print("invalid items accepted: ", sim.invalid_item)
 
     def write_csv(self):
         with open("output.csv", "w", newline='') as f:
@@ -331,12 +340,12 @@ if __name__ == "__main__":
     prob = Probability(
         prob_vote_engaged=0.9,
         prob_vote_disengaged=0.3,
-        prob_vote_correct_informed=0.9,
-        prob_vote_correct_uninformed=0.1,
+        prob_vote_correct_informed=0.5,
+        prob_vote_correct_uninformed=0.5,
         prob_obj_engaged=0.0,
         prob_obj_disengaged=0.0,
-        prob_obj_correct_informed=0.9,
-        prob_obj_correct_uninformed=0.1,
+        prob_obj_correct_informed=1.0,
+        prob_obj_correct_uninformed=0.0,
         prob_engaged=0.5,
         prob_informed=0.5
     )
@@ -346,39 +355,43 @@ if __name__ == "__main__":
         default_tokens=1000,
         stake=200,
         initial_stake=200,
-        delta=0.1,
-        code_complexity=pow(2,20)
+        delta=0.0,
+        code_complexity=pow(2,10)
     )
 
 
     #quantity_votes = registry.num_voters * (prob.prob_engaged * prob.prob_vote_engaged + (1 - prob.prob_engaged) * prob.prob_vote_disengaged)
 
+    qp = registry.num_voters//4
     sim = Simulation(prob, registry, quantity_votes=registry.num_voters, debug=True)
  
-    # Criação de grupos personalizados
+    # IU - Informed Ungaged
     sim.create_voter_group(
-        count=20,   
+        count=qp,   
         tokens=3000,
         is_engaged=False,
         is_informed=True
     )
 
+    # UE - Uninformed Engaged
     sim.create_voter_group(
-        count=20,  
+        count=qp,  
         tokens=3000,
         is_engaged=True,
         is_informed=False  
     )
 
+    # IE - Informed Engaged
     sim.create_voter_group(
-        count=20,  
+        count=qp,   
         tokens=3000,
         is_engaged=True,
         is_informed=True  
     )
 
+    # UU - Uninformed Ungaged
     sim.create_voter_group(
-        count=20,  
+        count=qp,   
         tokens=3000,
         is_engaged=False,
         is_informed=False 
