@@ -52,7 +52,7 @@ class Probability:
 
     def objection_effect(self, effect):
         if effect:
-            self.prob_bonus = 0.9
+            self.prob_bonus = 0.1
         else:
-            self.prob_bonus = -0.9
+            self.prob_bonus = -0.1
         

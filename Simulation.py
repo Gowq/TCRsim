@@ -7,10 +7,13 @@ from Item import Item
 from TCR import TCR
 from Probability import Probability
 from Registry import Registry
+import sys
+sys.stdout.reconfigure(encoding='utf-8')
 
 
 class Simulation:
-    invalid_item = 0
+    item_validity = None
+    valid_outcome = 0
 
     def __init__(self, probability, registry, quantity_votes, debug=False):
         self.probability = probability
@@ -55,8 +58,10 @@ class Simulation:
        
         if self.probability.will_vote_correct(voter, prob_correct):
             new_vote = item.is_valid()
-        else:
+        elif self.registry.blocked:
             new_vote = not item.is_valid()
+        else:
+            return self.process_objection(voter, item)
         
         old_vote = voter.get_vote()  
         voter.set_vote(new_vote)
@@ -89,7 +94,7 @@ class Simulation:
         self.registry.increase_itens()
         item.set_objection()
 
-        if self.debug:  # Novo
+        if self.debug:  
             print(f"[Debug] Voter {voter.voter_id} fez uma objeção.")
 
         if self.probability.will_object_correct(voter, prob_correct):
@@ -99,6 +104,9 @@ class Simulation:
         
         self.registry.block()
         return voter
+    
+
+        
 
     def run_simulation_round(self, round_time):
         self.round_number += 1
@@ -113,21 +121,30 @@ class Simulation:
             int(random.gauss(self.quantity_votes * round_time, 1)),
             self.registry.num_voters
         )
-        
+
         current_voters = []
         item = Item()
 
-        # Usa apenas os eleitores personalizados criados
+        if (round_time == self.registry.code_complexity):
+            item.set_validity()
+            self.item_validity = item.is_valid()
+        else:
+            item.set_validity(self.item_validity)
+
+        # Embaralha a ordem dos eleitores para evitar viés
+        shuffled_voters = self.voters.copy()
+        random.shuffle(shuffled_voters)
+
         for j in range(votes_round):
-            voter = copy(self.voters[j % len(self.voters)])
+            # Como votes_round == número total de eleitores, podemos iterar na ordem embaralhada
+            voter = copy(shuffled_voters[j % len(shuffled_voters)])
             voter.set_vote(None)
             processed_voter = self.process_voter(voter, item)
             current_voters.append(processed_voter)
 
-        # Atualiza a lista principal de eleitores
-        for idx, processed_voter in enumerate(current_voters):
-            self.voters[idx % len(self.voters)] = processed_voter
-        
+        # Atualiza a lista principal de eleitores – a ordem aqui pode ser mantida aleatória ou redefinida
+        self.voters = current_voters.copy()
+
         accepted = sum(v.get_vote() for v in current_voters if v.get_vote() is not None)
         rejected = sum(1 for v in current_voters if v.get_vote() is False)
         item.set_acceptance(accepted >= rejected)
@@ -137,15 +154,13 @@ class Simulation:
             print(f"Round {self.round_number} - Resultado Final")
             print(f"Item válido: {item.is_valid()} | Aceito: {accepted >= rejected}")
             print(f"{'='*40}\n")
-        
-            if item.is_valid() and rejected > accepted or not item.is_valid() and accepted >= rejected:
-                sim.invalid_item += 1
 
         self.item_array.append(item)
         self.vote_results.append(current_voters)
         num_winners = sum(1 for v in current_voters if v.get_vote() == item.is_accepted())
         self.update_tokens(current_voters, num_winners)
         self.update_tcr()
+
 
     def update_tokens(self, voters, participants):
         if participants == 0:
@@ -213,17 +228,26 @@ class Simulation:
 
     def run(self):
         round_time = self.registry.code_complexity
-        while round_time >= 1:
-            if round_time != 1:
-                self.registry.unblock()
-            self.run_simulation_round(round_time)
+        
+        while round_time > 1:
+
+            self.registry.unblock()
+            self.run_simulation_round(round_time)            
             round_time /= 2
+
+            if (self.item_array[-1].is_accepted() and self.registry.blocked):
+                continue
+            else: 
+                break
 
         self.write_csv()
         self.generate_plots()
 
-        if (sim.debug):
-            print("invalid items accepted: ", sim.invalid_item)
+        if (self.item_array[-1].is_valid() == self.item_array[-1].is_accepted()):
+            self.valid_outcome += 1
+
+        #print(self.valid_outcome)
+        #print("valid outcome: ", (self.item_array[-1].is_valid() == self.item_array[-1].is_accepted()))
 
     def write_csv(self):
         with open("output.csv", "w", newline='') as f:
@@ -271,12 +295,14 @@ class Simulation:
                 #print(voter.get_tokens())
                 key = ('i' if voter.get_information() else 'u') + ('e' if voter.get_engagement() else 'u')
                 sums[key] += voter.get_tokens()
-            print("=" * 40)
-            print(sums)
+            if (self.debug): 
+                print("=" * 40)
+                print(sums)
                     
             for key in categories:
                 count = categories[key]['count'] or 1  # Evita divisão por zero
-                print(count)
+                #if (self.debug): 
+                    #print(count)
                 categories[key]['values'].append(sums[key] / count)
 
         # Plotagem do gráfico
@@ -337,40 +363,41 @@ class Simulation:
 
 
 if __name__ == "__main__":
+    random.seed(42)
     prob = Probability(
-        prob_vote_engaged=0.9,
-        prob_vote_disengaged=0.3,
-        prob_vote_correct_informed=0.5,
+        prob_vote_engaged=0.8,
+        prob_vote_disengaged=0.2,
+        prob_vote_correct_informed=0.7,
         prob_vote_correct_uninformed=0.5,
-        prob_obj_engaged=0.0,
-        prob_obj_disengaged=0.0,
-        prob_obj_correct_informed=1.0,
-        prob_obj_correct_uninformed=0.0,
+        prob_obj_engaged=0.7,
+        prob_obj_disengaged=0.1,
+        prob_obj_correct_informed=0.8,
+        prob_obj_correct_uninformed=0.3,
         prob_engaged=0.5,
         prob_informed=0.5
     )
 
     registry = Registry(
-        num_voters=100,
+        num_voters=40,
         default_tokens=1000,
         stake=200,
         initial_stake=200,
-        delta=0.0,
-        code_complexity=pow(2,10)
+        delta=0.05,
+        code_complexity=pow(2,2)
     )
 
 
-    #quantity_votes = registry.num_voters * (prob.prob_engaged * prob.prob_vote_engaged + (1 - prob.prob_engaged) * prob.prob_vote_disengaged)
+    quantity_votes = registry.num_voters * (prob.prob_engaged * prob.prob_vote_engaged + (1 - prob.prob_engaged) * prob.prob_vote_disengaged)
 
     qp = registry.num_voters//4
     sim = Simulation(prob, registry, quantity_votes=registry.num_voters, debug=True)
  
-    # IU - Informed Ungaged
+    # IE - Informed Engaged
     sim.create_voter_group(
-        count=qp,   
+        count=2*qp,   
         tokens=3000,
-        is_engaged=False,
-        is_informed=True
+        is_engaged=True,
+        is_informed=True  
     )
 
     # UE - Uninformed Engaged
@@ -381,14 +408,6 @@ if __name__ == "__main__":
         is_informed=False  
     )
 
-    # IE - Informed Engaged
-    sim.create_voter_group(
-        count=qp,   
-        tokens=3000,
-        is_engaged=True,
-        is_informed=True  
-    )
-
     # UU - Uninformed Ungaged
     sim.create_voter_group(
         count=qp,   
@@ -397,5 +416,16 @@ if __name__ == "__main__":
         is_informed=False 
     )
 
+     # IU - Informed Ungaged
+    sim.create_voter_group(
+        count=qp,   
+        tokens=3000,
+        is_engaged=False,
+        is_informed=True
+    )
 
-    sim.run()
+    qnt = 100
+
+    for i in range(qnt):
+        sim.run()
+    print("accuracy: ", sim.valid_outcome/qnt * 100, "%")

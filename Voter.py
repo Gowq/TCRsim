@@ -44,7 +44,6 @@ class Voter:
 
         self.__mVote = None
 
-    # Keep existing getter/setter methods
     def get_engagement(self) -> bool: return self.__mEngaged
     def get_information(self) -> bool: return self.__mInformed
     def get_tokens(self) -> float: return self.__mTokens
