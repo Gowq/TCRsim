@@ -8,6 +8,8 @@ from TCR import TCR
 from Probability import Probability
 from Registry import Registry
 import sys
+import itertools
+from tqdm import tqdm 
 sys.stdout.reconfigure(encoding='utf-8')
 
 
@@ -106,8 +108,6 @@ class Simulation:
         return voter
     
 
-        
-
     def run_simulation_round(self, round_time):
         self.round_number += 1
         self.registry.stake_pool = 0
@@ -160,7 +160,6 @@ class Simulation:
         num_winners = sum(1 for v in current_voters if v.get_vote() == item.is_accepted())
         self.update_tokens(current_voters, num_winners)
         self.update_tcr()
-
 
     def update_tokens(self, voters, participants):
         if participants == 0:
@@ -240,29 +239,100 @@ class Simulation:
             else: 
                 break
 
-        self.write_csv()
-        self.generate_plots()
+        # Note: These calls occur each simulation round.
+        # In the outer loop below we will re-generate plots (with unique names) after 100 rounds.
+        #self.write_csv()
+        #self.generate_plots()
 
         if (self.item_array[-1].is_valid() == self.item_array[-1].is_accepted()):
             self.valid_outcome += 1
 
-        #print(self.valid_outcome)
-        #print("valid outcome: ", (self.item_array[-1].is_valid() == self.item_array[-1].is_accepted()))
+    def get_voter_status(self, voter):
+        # (Existing method – can be left unchanged if used elsewhere)
+        informed = "I" if voter.get_information() else "U"
+        engaged = "E" if voter.get_engagement() else "U"
+        return f"{informed}/{engaged}"
 
-    def write_csv(self):
-        with open("output.csv", "w", newline='') as f:
+    def get_voter_acronym(self, voter):
+        """
+        Returns a two-letter acronym based on engagement and information.
+        Acronyms:
+          IE: Engaged & Informed
+          IU: Engaged & Uninformed
+          UI: Unengaged & Informed
+          UU: Unengaged & Uninformed
+        """
+        if voter.get_engagement():
+            first_letter = "I"  # I for engaged
+            second_letter = "E" if voter.get_information() else "U"
+        else:
+            first_letter = "U"  # U for unengaged
+            second_letter = "I" if voter.get_information() else "U"
+        return first_letter + second_letter
+
+    def write_csv(self, accuracy, overwrite=False):
+        """
+        Writes a complete simulation block (parameters, simulation rounds, and accuracy) to CSV.
+        If overwrite is True, the file is overwritten; otherwise, the new block is appended.
+        """
+        # Decide mode.
+        if overwrite:
+            mode = "w"
+        else:
+            mode = "a"
+
+        with open("output.csv", mode, newline='') as f:
             writer = csv.writer(f)
-            writer.writerow(["TCR Val", "Valid", "Accept"] + [f"V{i+1}" for i in range(self.registry.num_voters)] + ["Total"])
             
+            # Write a block header with the simulation parameters.
+            writer.writerow(["Simulation Parameters:"])
+            param_names = [
+                "prob_vote_engaged", 
+                "prob_vote_disengaged", 
+                "prob_vote_correct_informed",
+                "prob_vote_correct_uninformed",
+                "prob_obj_engaged",
+                "prob_obj_disengaged",
+                "prob_obj_correct_informed",
+                "prob_obj_correct_uninformed"
+            ]
+            param_values = [
+                self.probability.prob_vote_engaged,
+                self.probability.prob_vote_disengaged,
+                self.probability.prob_vote_correct_informed,
+                self.probability.prob_vote_correct_uninformed,
+                self.probability.prob_obj_engaged,
+                self.probability.prob_obj_disengaged,
+                self.probability.prob_obj_correct_informed,
+                self.probability.prob_obj_correct_uninformed
+            ]
+            writer.writerow(param_names)
+            writer.writerow(param_values)
+            writer.writerow([])  # blank line for separation
+
+            # Write main header for simulation rounds.
+            header = ["TCR Val", "Valid", "Accept"] + \
+                     [f"V{i+1}" for i in range(self.registry.num_voters)] + ["Total"]
+            writer.writerow(header)
+            
+            # Write a row for each simulation round.
             for i, item in enumerate(self.item_array):
                 row = [
                     f"{self.tcr_array[i].get_tcr_value():.2f}",
                     str(item.is_valid()),
                     str(item.is_accepted())
                 ]
-                row += [f"{v.get_tokens():.2f}" for v in self.vote_results[i]]
+                # Each voter's cell includes tokens and the voter type acronym (e.g., "3000.00 (IE)")
+                row += [f"{v.get_tokens():.2f} ({self.get_voter_acronym(v)})" 
+                        for v in self.vote_results[i]]
                 row.append(f"{sum(v.get_tokens() for v in self.vote_results[i]):.2f}")
                 writer.writerow(row)
+
+            # Write a row for the accuracy.
+            writer.writerow(["Accuracy", f"{accuracy:.2f}%"])
+            writer.writerow([])  # extra blank line to separate simulation blocks.
+
+
 
     def get_voter_status(self, voter):
         informed = "I" if voter.get_information() else "U"
@@ -270,10 +340,11 @@ class Simulation:
         return f"{informed}/{engaged}"
 
     def generate_plots(self):
-        self.generate_voter_plot()
-        self.generate_tcr_plot()
+        self.generate_voter_plot()  # Saves to default filename "voter_tokens.png"
+        self.generate_tcr_plot()    # Saves to default filename "tcr_values.png"
 
-    def generate_voter_plot(self):
+    # Now the plotting methods accept an optional filename parameter.
+    def generate_voter_plot(self, filename="voter_tokens.png"):
         categories = {
             'ie': {'values': [], 'count': 0},
             'iu': {'values': [], 'count': 0},
@@ -291,8 +362,6 @@ class Simulation:
         for round_voters in self.vote_results:
             sums = {k: 0.0 for k in categories}
             for voter in round_voters:  # Usa os eleitores da rodada específica
-                #print(voter.voter_id)
-                #print(voter.get_tokens())
                 key = ('i' if voter.get_information() else 'u') + ('e' if voter.get_engagement() else 'u')
                 sums[key] += voter.get_tokens()
             if (self.debug): 
@@ -301,8 +370,6 @@ class Simulation:
                     
             for key in categories:
                 count = categories[key]['count'] or 1  # Evita divisão por zero
-                #if (self.debug): 
-                    #print(count)
                 categories[key]['values'].append(sums[key] / count)
 
         # Plotagem do gráfico
@@ -318,15 +385,16 @@ class Simulation:
         plt.xlabel("Voting Round")
         plt.ylabel("Average Tokens")
         plt.legend()
-        plt.savefig("voter_tokens.png")
+        plt.savefig(filename)
         plt.close()
 
-    def generate_tcr_plot(self):
+    def generate_tcr_plot(self, filename="tcr_values.png"):
         values = [t.get_tcr_value() for t in self.tcr_array]
+        plt.figure(figsize=(10, 5))
         plt.plot(values)
         plt.xlabel("Voting Round")
         plt.ylabel("TCR Value")
-        plt.savefig("tcr_values.png")
+        plt.savefig(filename)
         plt.close()
 
     def create_voter_group(self, 
@@ -364,68 +432,61 @@ class Simulation:
 
 if __name__ == "__main__":
     random.seed(42)
-    prob = Probability(
-        prob_vote_engaged=0.8,
-        prob_vote_disengaged=0.2,
-        prob_vote_correct_informed=0.7,
-        prob_vote_correct_uninformed=0.5,
-        prob_obj_engaged=0.7,
-        prob_obj_disengaged=0.1,
-        prob_obj_correct_informed=0.8,
-        prob_obj_correct_uninformed=0.3,
-        prob_engaged=0.5,
-        prob_informed=0.5
-    )
+    qnt = 100  
+    total_voters = 40  
+    total_iterations = 10
+    total_combinations = total_iterations ** 5  # Total iterations for the outer loop
 
-    registry = Registry(
-        num_voters=40,
-        default_tokens=1000,
-        stake=200,
-        initial_stake=200,
-        delta=0.05,
-        code_complexity=pow(2,2)
-    )
+    # Loop through parameter combinations with a progress bar.
+    for i, j, k, l, m in tqdm(itertools.product(range(total_iterations), repeat=5),
+                                           total=total_combinations,
+                                           desc="Parameter combinations"):
+        p_ve, p_vdi, p_vci, p_oci, p_ocu = [0.1 * (1 + x) for x in (i, j, k, l, m)]
+        
+        prob = Probability(
+            prob_vote_engaged=p_ve,
+            prob_vote_disengaged=p_vdi,
+            prob_vote_correct_informed=p_vci,  
+            prob_vote_correct_uninformed=0.5,
+            prob_obj_engaged=0.4,
+            prob_obj_disengaged=0.1,
+            prob_obj_correct_informed=p_oci,
+            prob_obj_correct_uninformed=p_ocu,
+            prob_engaged=0.5,
+            prob_informed=0.5
+        )
 
+        registry = Registry(
+            num_voters=total_voters,
+            default_tokens=1000,
+            stake=200,
+            initial_stake=200,
+            delta=0.00,
+            code_complexity=pow(2, 2)
+        )
 
-    quantity_votes = registry.num_voters * (prob.prob_engaged * prob.prob_vote_engaged + (1 - prob.prob_engaged) * prob.prob_vote_disengaged)
+        quantity_votes = total_voters * (prob.prob_engaged * prob.prob_vote_engaged +
+                                            (1 - prob.prob_engaged) * prob.prob_vote_disengaged)
+        sim = Simulation(prob, registry, quantity_votes=total_voters, debug=False)
+    
+        qp = total_voters // 4
 
-    qp = registry.num_voters//4
-    sim = Simulation(prob, registry, quantity_votes=registry.num_voters, debug=True)
- 
-    # IE - Informed Engaged
-    sim.create_voter_group(
-        count=2*qp,   
-        tokens=3000,
-        is_engaged=True,
-        is_informed=True  
-    )
+        # Create voter groups:
+        sim.create_voter_group(count=qp, tokens=3000, is_engaged=True,  is_informed=True)   # IE
+        sim.create_voter_group(count=qp, tokens=3000, is_engaged=True,  is_informed=False)  # UE
+        sim.create_voter_group(count=qp, tokens=3000, is_engaged=False, is_informed=False)  # UU
+        sim.create_voter_group(count=qp, tokens=3000, is_engaged=False, is_informed=True)   # IU
 
-    # UE - Uninformed Engaged
-    sim.create_voter_group(
-        count=qp,  
-        tokens=3000,
-        is_engaged=True,
-        is_informed=False  
-    )
+        # Run the simulation rounds.
+        for _ in tqdm(range(qnt), desc="Simulation rounds", leave=False):
+            sim.run()
 
-    # UU - Uninformed Ungaged
-    sim.create_voter_group(
-        count=qp,   
-        tokens=3000,
-        is_engaged=False,
-        is_informed=False 
-    )
+        accuracy = sim.valid_outcome / qnt * 100
+        #print(f"Accuracy for prob_vote_correct_informed = {p_vci:.2f}: {accuracy:.2f}%")
+        
+        # Now write the complete simulation block to CSV.
+        # For the very first simulation block you might use overwrite=True.
+        sim.write_csv(accuracy, overwrite=False)
 
-     # IU - Informed Ungaged
-    sim.create_voter_group(
-        count=qp,   
-        tokens=3000,
-        is_engaged=False,
-        is_informed=True
-    )
-
-    qnt = 100
-
-    for i in range(qnt):
-        sim.run()
-    print("accuracy: ", sim.valid_outcome/qnt * 100, "%")
+        #sim.generate_voter_plot(filename=f"voter_tokens_{p_vci:.2f}.png")
+        #sim.generate_tcr_plot(filename=f"tcr_values_{p_vci:.2f}.png")
