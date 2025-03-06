@@ -12,11 +12,41 @@ import itertools
 from tqdm import tqdm
 import numpy as np
 import io
+import gc
+import os
 import concurrent.futures
 
 sys.stdout.reconfigure(encoding='utf-8')
 
+# -------------------------------
+# Bulk random number generation
+# -------------------------------
+class BulkRandom:
+    """
+    Pre-generates a large pool of random numbers using NumPy.
+    Each call to next() returns a value from the pool.
+    When the pool is exhausted, a new batch is generated.
+    """
+    def __init__(self, pool_size=10**7):
+        self.pool_size = pool_size
+        self.pool = np.random.random(pool_size)
+        self.index = 0
 
+    def next(self):
+        if self.index >= self.pool_size:
+            self.pool = np.random.random(self.pool_size)
+            self.index = 0
+        value = self.pool[self.index]
+        self.index += 1
+        return float(value)
+
+# Create a bulk random instance and override random.random
+bulk_random = BulkRandom()
+random.random = bulk_random.next
+
+# -------------------------------
+# Simulation class and methods
+# -------------------------------
 class Simulation:
     item_validity = None
     valid_outcome = 0
@@ -35,7 +65,7 @@ class Simulation:
         self.registry.num_voters = 0  # Reinicia o contador de eleitores
 
     def process_voter(self, voter, item):
-        # Generate random values; for further optimization these could be pre-generated in bulk.
+        # Use bulk random values.
         prob_object = random.random()
         prob_vote = random.random()
 
@@ -125,7 +155,7 @@ class Simulation:
         else:
             item.set_validity(self.item_validity)
 
-        # Use NumPy to shuffle the voters.
+        # Shuffle voters using NumPy.
         shuffled_voters = self.voters.copy()
         np.random.shuffle(shuffled_voters)
 
@@ -197,9 +227,17 @@ class Simulation:
 
     def run(self):
         round_time = self.registry.code_complexity
+        # Temporary aggregators for summary statistics:
+        total_tokens = 0
+        total_votes = 0
+
         while round_time > 1:
             self.registry.unblock()
             self.run_simulation_round(round_time)
+            # Aggregate summary data from this round:
+            round_tokens = sum(v.get_tokens() for v in self.vote_results[-1])
+            total_tokens += round_tokens
+            total_votes += len(self.vote_results[-1])
             round_time /= 2
             if self.item_array[-1].is_accepted() and self.registry.blocked:
                 continue
@@ -207,6 +245,13 @@ class Simulation:
                 break
         if self.item_array[-1].is_valid() == self.item_array[-1].is_accepted():
             self.valid_outcome += 1
+
+        # If not needing detailed info, clear round-by-round arrays.
+        if not self.debug:
+            self.vote_results.clear()
+            self.item_array.clear()
+            self.tcr_array.clear()
+
 
     def write_csv(self, accuracy, overwrite=False, detailed=True, return_string=False):
         """
@@ -349,8 +394,9 @@ class Simulation:
             self.voters.append(voter)
         self.registry.num_voters += count
 
-
-# Global simulation parameters.
+# -------------------------------
+# Global simulation parameters and block simulation
+# -------------------------------
 total_voters = 40  
 qnt = 100  
 total_iterations = 10
@@ -404,22 +450,23 @@ def simulate_block(params):
     csv_str = sim.write_csv(accuracy, overwrite=False, detailed=False, return_string=True)
     return csv_str
 
-
 if __name__ == "__main__":
     random.seed(42)
     np.random.seed(42)
-    total_combinations = total_iterations ** qnt_outer_loop  # Total parameter combinations
+    total_combinations = total_iterations ** qnt_outer_loop
     all_params = list(itertools.product(range(total_iterations), repeat=qnt_outer_loop))
-    batch_size = 10^2  # Batch size for process submission
-    FLUSH_FREQUENCY = 10^2  # Number of simulation blocks to buffer in memory before flushing to disk
+    batch_size = 10**5  
+    FLUSH_FREQUENCY = 10**4  
 
-    # Open output file once for bulk writes.
     with open("output.csv", "w", newline='') as outfile:
-        aggregated_csv = []  # In-memory buffer for CSV outputs
+        aggregated_csv = []
         with tqdm(total=total_combinations, desc="Parameter combinations") as pbar:
-            with concurrent.futures.ProcessPoolExecutor() as executor:
+            # Limit workers to available CPUs
+            with concurrent.futures.ProcessPoolExecutor(max_workers=os.cpu_count()) as executor:
                 for batch_start in range(0, len(all_params), batch_size):
                     batch = all_params[batch_start:batch_start + batch_size]
+                    # Disable GC for the duration of this batch
+                    gc.disable()
                     futures = [executor.submit(simulate_block, params) for params in batch]
                     for future in concurrent.futures.as_completed(futures):
                         try:
@@ -428,12 +475,13 @@ if __name__ == "__main__":
                         except Exception as e:
                             print("Error:", e)
                         pbar.update(1)
-                        # Flush buffer to disk if flush frequency is reached.
                         if len(aggregated_csv) >= FLUSH_FREQUENCY:
                             outfile.write("\n".join(aggregated_csv) + "\n")
                             outfile.flush()
                             aggregated_csv.clear()
-            # Write any remaining data from the buffer.
+                    # Re-enable and run a full collection after the batch.
+                    gc.enable()
+                    gc.collect()
             if aggregated_csv:
                 outfile.write("\n".join(aggregated_csv) + "\n")
                 outfile.flush()
