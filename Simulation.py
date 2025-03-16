@@ -247,10 +247,10 @@ class Simulation:
             self.valid_outcome += 1
 
         # If not needing detailed info, clear round-by-round arrays.
-        if not self.debug:
-            self.vote_results.clear()
-            self.item_array.clear()
-            self.tcr_array.clear()
+        #if not self.debug:
+        #    self.vote_results.clear()
+        #    self.item_array.clear()
+        #    self.tcr_array.clear()
 
 
     def write_csv(self, accuracy, overwrite=False, detailed=True, return_string=False):
@@ -456,7 +456,7 @@ if __name__ == "__main__":
     total_combinations = total_iterations ** qnt_outer_loop
     all_params = list(itertools.product(range(total_iterations), repeat=qnt_outer_loop))
     batch_size = 10**5  
-    FLUSH_FREQUENCY = 10**4  
+    FLUSH_FREQUENCY = 10**2  
 
     with open("output.csv", "w", newline='') as outfile:
         aggregated_csv = []
